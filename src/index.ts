@@ -13,6 +13,8 @@ import dotenv from 'dotenv';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { homedir, platform, userInfo } from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const execAsync = promisify(exec);
 
@@ -178,35 +180,98 @@ await server.connect(transport);
 
 // Improved OS detection and path handling functions
 function getDesktopPath(): string {
-  const home = homedir();
-  
-  // Check if saveToDesktop is explicitly requested
-  const saveToDesktop = process.env.SAVE_TO_DESKTOP === 'true';
-  
-  if (platform() === 'win32') {
-    // Windows - User profile desktop
-    return join(process.env.USERPROFILE || home, 'Desktop');
-  } else if (platform() === 'darwin') {
-    // macOS
-    return join(home, 'Desktop');
-  } else {
-    // Linux - Use XDG if available
-    return join(home, 'Desktop');
+  try {
+    // Get current username and home directory
+    const home = homedir();
+    const username = userInfo().username;
+    
+    console.log(`Detected username: ${username}`);
+    console.log(`Detected home directory: ${home}`);
+    
+    // Check if saveToDesktop is explicitly requested
+    const saveToDesktop = process.env.SAVE_TO_DESKTOP === 'true';
+    
+    if (platform() === 'win32') {
+      // Windows - User profile desktop (C:\Users\Username\Desktop)
+      const desktopPath = process.env.USERPROFILE 
+        ? path.join(process.env.USERPROFILE, 'Desktop')
+        : path.join('C:', 'Users', username, 'Desktop');
+      
+      console.log(`Windows desktop path: ${desktopPath}`);
+      
+      // Verify the path exists
+      if (fs.existsSync(desktopPath)) {
+        return desktopPath;
+      } else {
+        console.warn(`Desktop path not found: ${desktopPath}, falling back to home`);
+        return home;
+      }
+    } else if (platform() === 'darwin') {
+      // macOS
+      const desktopPath = path.join(home, 'Desktop');
+      console.log(`macOS desktop path: ${desktopPath}`);
+      return desktopPath;
+    } else {
+      // Linux - Use XDG if available
+      const xdgDesktop = process.env.XDG_DESKTOP_DIR;
+      if (xdgDesktop && fs.existsSync(xdgDesktop)) {
+        console.log(`Linux XDG desktop path: ${xdgDesktop}`);
+        return xdgDesktop;
+      }
+      const linuxDesktop = path.join(home, 'Desktop');
+      if (fs.existsSync(linuxDesktop)) {
+        console.log(`Linux desktop path: ${linuxDesktop}`);
+        return linuxDesktop;
+      }
+      console.log(`Using home directory: ${home}`);
+      return home;
+    }
+  } catch (error) {
+    console.error('Error detecting desktop path:', error);
+    return homedir();
   }
 }
 
 function getDocumentsPath(): string {
-  const home = homedir();
-  
-  if (platform() === 'win32') {
-    // Windows - User profile documents
-    return join(process.env.USERPROFILE || home, 'Documents');
-  } else if (platform() === 'darwin') {
-    // macOS
-    return join(home, 'Documents');
-  } else {
-    // Linux - Use XDG if available or default to home
-    return home;
+  try {
+    const home = homedir();
+    const username = userInfo().username;
+    
+    if (platform() === 'win32') {
+      // Windows - User profile documents (C:\Users\Username\Documents)
+      const documentsPath = process.env.USERPROFILE 
+        ? path.join(process.env.USERPROFILE, 'Documents')
+        : path.join('C:', 'Users', username, 'Documents');
+      
+      console.log(`Windows documents path: ${documentsPath}`);
+      
+      // Verify the path exists
+      if (fs.existsSync(documentsPath)) {
+        return documentsPath;
+      } else {
+        console.warn(`Documents path not found: ${documentsPath}, falling back to home`);
+        return home;
+      }
+    } else if (platform() === 'darwin') {
+      // macOS
+      return path.join(home, 'Documents');
+    } else {
+      // Linux - Use XDG if available or default to home
+      const xdgDocuments = process.env.XDG_DOCUMENTS_DIR;
+      if (xdgDocuments && fs.existsSync(xdgDocuments)) {
+        return xdgDocuments;
+      }
+      
+      const linuxDocuments = path.join(home, 'Documents');
+      if (fs.existsSync(linuxDocuments)) {
+        return linuxDocuments;
+      }
+      
+      return home;
+    }
+  } catch (error) {
+    console.error('Error detecting documents path:', error);
+    return homedir();
   }
 }
 
@@ -295,6 +360,7 @@ async function saveImageWithProperPath(buffer: Buffer, fileName: string, isRemot
     console.log(`Saving to directory: ${saveDir}`);
     console.log(`Platform: ${platform()}`);
     console.log(`Home directory: ${homedir()}`);
+    console.log(`Username: ${userInfo().username}`);
     
     // Ensure save directory exists
     ensureDirectoryExists(saveDir);
@@ -306,11 +372,14 @@ async function saveImageWithProperPath(buffer: Buffer, fileName: string, isRemot
     writeFileSync(outputPath, buffer);
     console.log(`Image saved successfully to: ${outputPath}`);
     
+    // Create HTML file in the same directory
+    const htmlFileName = `${fileName.replace('.png', '')}_preview.html`;
+    const htmlPath = join(saveDir, htmlFileName);
+    
     // For remote mode, create a publicUrl
     let publicUrl = undefined;
     if (isRemote) {
       // In remote mode, the path needs to be accessible to the client
-      // This could be a relative path or a full URL depending on your setup
       publicUrl = `/output/${fileName}`;
       console.log(`Public URL for remote access: ${publicUrl}`);
     }
