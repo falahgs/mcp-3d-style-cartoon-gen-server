@@ -1,5 +1,6 @@
 # MCP 3D Cartoon Generator
 
+[![smithery badge](https://smithery.ai/badge/@falahgs/mcp-3d-style-cartoon-gen-server)](https://smithery.ai/server/@falahgs/mcp-3d-style-cartoon-gen-server)
 A professional-grade server for generating high-quality 3D-style cartoon images using Google's Gemini AI. This tool specializes in creating child-friendly, colorful, and engaging cartoon images from text prompts.
 
 ![3D Cartoon Generator Demo](./video/mcp-3d-style-server.gif)
@@ -28,6 +29,15 @@ A professional-grade server for generating high-quality 3D-style cartoon images 
 
 ## ⚙️ Installation
 
+### Installing via Smithery
+
+To install 3D Cartoon Generator Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@falahgs/mcp-3d-style-cartoon-gen-server):
+
+```bash
+npx -y @smithery/cli install @falahgs/mcp-3d-style-cartoon-gen-server --client claude
+```
+
+### Manual Installation
 1. Clone the repository:
 ```bash
 git clone https://github.com/falahgs/mcp_3d_cartoon_generator.git
