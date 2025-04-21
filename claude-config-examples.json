@@ -1,0 +1,18 @@
+{
+    "mcpServers": {
+      "mcp-3d-cartoon-generator": {
+        "command": "node",
+        "args": [
+          "G:\\mcp-projects\\mcp-3d-style-cartoon-gen-server\\build\\index.js"
+        ],
+        "env": {
+          "GEMINI_API_KEY": "AIzaSyBGskNtesKEZOghmEzQRAikKdxnq75XPA4",
+          "IS_REMOTE": "true",
+          "SAVE_TO_DESKTOP": "true",
+          "DETECT_OS_PATHS": "true",
+          "ALLOWED_DIRECTORIES": "C:\\Users\\Max\\Desktop,C:\\Users\\Max\\Documents",
+          "DEBUG": "false"
+        }
+      }
+    }
+  }
