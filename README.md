@@ -1,23 +1,35 @@
-# MCP 3D Cartoon Generator
+# MCP Combined Server: 3D Cartoon Generator & File System Tools
 
-A professional-grade server for generating high-quality 3D-style cartoon images using Google's Gemini AI. This tool specializes in creating child-friendly, colorful, and engaging cartoon images from text prompts.
+A professional-grade server that provides two major capabilities: 
+1. High-quality 3D-style cartoon image generation using Google's Gemini AI
+2. Secure file system operations for reading, writing, and managing files
 
 ![3D Cartoon Generator Demo](./video/mcp-3d-style-server.gif)
 
 ## 🌟 Features
 
+### Image Generation
 - **3D Cartoon Generation**: Creates high-quality 3D-style cartoon images
 - **Child-Friendly Design**: Focuses on colorful, playful, and engaging visuals
 - **Instant Preview**: Automatically opens generated images in your default browser
 - **Local Storage**: Saves images and previews in an organized output directory
-- **Professional Configuration**: Robust error handling and logging
+
+### File System Operations
+- **Secure File Access**: Path validation and security checks
+- **Read/Write Files**: Read and write text file contents
+- **Directory Operations**: List, create, and navigate directories
+- **File Search**: Find files matching patterns
+
+### System Features
+- **Professional Configuration**: Robust error handling and controlled logging
 - **Cross-Platform Support**: Intelligent file path handling for Windows, macOS, and Linux
 - **Smart OS Detection**: Automatically finds the best save location for each operating system
+- **Security Controls**: Restricted directory access through configuration
 
 ## 🛠️ Technical Stack
 
 - **Core Framework**: Model Context Protocol (MCP) SDK
-- **AI Integration**: Google Generative AI (Gemini Pro Vision)
+- **AI Integration**: Google Generative AI (Gemini)
 - **Runtime**: Node.js v14+
 - **Language**: TypeScript
 - **Package Manager**: npm
@@ -32,8 +44,8 @@ A professional-grade server for generating high-quality 3D-style cartoon images 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/falahgs/mcp_3d_cartoon_generator.git
-cd mcp_3d_cartoon_generator
+git clone https://github.com/falahgs/mcp-3d-style-cartoon-gen-server.git
+cd mcp-3d-style-cartoon-gen-server
 ```
 
 2. Install dependencies:
@@ -45,53 +57,63 @@ npm install
 Create a `.env` file in the root directory:
 ```env
 GEMINI_API_KEY=your_api_key_here
+ALLOWED_DIRECTORIES=/path/to/allowed/dir1,/path/to/allowed/dir2
+```
+
+4. Build the project:
+```bash
+npm run build
 ```
 
 ## 🔧 Configuring Claude Desktop with MCP Server
 
-To integrate the MCP 3D Cartoon Generator with Claude Desktop:
+To integrate this combined server with Claude Desktop:
 
 1. Locate the Configuration File:
    - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
    - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
    - Linux: `~/.config/Claude/claude_desktop_config.json`
 
-2. Edit the Configuration:
-   Open the `claude_desktop_config.json` file in a text editor and add the following configuration:
+2. Add the following configuration:
 
 ```json
 {
   "mcpServers": {
-    "mcp-3d-style-cartoon-gen-server": {
-      "command": "cmd",
+    "mcp-3d-cartoon-generator": {
+      "command": "node",
       "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@smithery/cli@latest",
-        "run",
-        "@falahgs/mcp-3d-style-cartoon-gen-server",
-        "--config",
-        "{\"geminiApiKey\":\"your_gemini_api_key_here\", \"crossPlatformPaths\": true, \"saveToDesktop\": true}"
+        "path/to/your/build/index.js"
       ],
       "env": {
+        "GEMINI_API_KEY": "your_gemini_api_key_here",
         "IS_REMOTE": "true",
-        "DETECT_OS_PATHS": "true"
+        "SAVE_TO_DESKTOP": "true",
+        "DETECT_OS_PATHS": "true",
+        "ALLOWED_DIRECTORIES": "C:\\Users\\YourUsername\\Desktop,C:\\Users\\YourUsername\\Documents",
+        "DEBUG": "false"
       }
     }
   }
 }
 ```
 
-This configuration uses Smithery to automatically handle cross-platform path issues, ensuring that image files are saved in the appropriate location for your operating system.
+### Windows PowerShell Helper Script
 
-## 🚀 Usage
+For Windows users, you can use the included `fix_claude_config.ps1` script to automatically configure Claude Desktop:
 
-### Tool Configuration
+1. Edit the script to update the path to your server build and your Gemini API key
+2. Run the script in PowerShell:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\fix_claude_config.ps1
+```
 
-The server provides a single tool for 3D cartoon image generation:
+This will create or update the configuration file with proper encoding and settings.
 
-```typescript
+## 🚀 Available Tools
+
+### 1. Image Generation Tool
+
+```json
 {
   "name": "generate_3d_cartoon",
   "description": "Generates a 3D style cartoon image for kids based on the given prompt",
@@ -112,10 +134,119 @@ The server provides a single tool for 3D cartoon image generation:
 }
 ```
 
-### Example Usage
+### 2. File System Tools
 
-1. Generate an image:
-```typescript
+#### Read File
+```json
+{
+  "name": "read_file",
+  "description": "Read the contents of a file",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Path to the file to read"
+      }
+    },
+    "required": ["path"]
+  }
+}
+```
+
+#### Write File
+```json
+{
+  "name": "write_file",
+  "description": "Write content to a file",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Path to the file to write"
+      },
+      "content": {
+        "type": "string",
+        "description": "Content to write to the file"
+      }
+    },
+    "required": ["path", "content"]
+  }
+}
+```
+
+#### List Directory
+```json
+{
+  "name": "list_directory",
+  "description": "List the contents of a directory",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Path to the directory to list"
+      }
+    },
+    "required": ["path"]
+  }
+}
+```
+
+#### Create Directory
+```json
+{
+  "name": "create_directory",
+  "description": "Create a new directory",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Path to the directory to create"
+      }
+    },
+    "required": ["path"]
+  }
+}
+```
+
+#### Search Files
+```json
+{
+  "name": "search_files",
+  "description": "Search for files matching a pattern",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Base directory to search from"
+      },
+      "pattern": {
+        "type": "string",
+        "description": "Search pattern (glob format)"
+      },
+      "excludePatterns": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Patterns to exclude from search (glob format)"
+      }
+    },
+    "required": ["path", "pattern"]
+  }
+}
+```
+
+## 📄 Example Usage
+
+### Image Generation Examples
+
+```javascript
+// Generate a 3D cartoon
 {
   "name": "generate_3d_cartoon",
   "arguments": {
@@ -125,95 +256,94 @@ The server provides a single tool for 3D cartoon image generation:
 }
 ```
 
-2. The tool will:
-   - Generate the image using Gemini AI
-   - Save it as a PNG file in the `output` directory
-   - Create an HTML preview
-   - Open the preview in your default browser (in local mode)
-   - Return both the image path and preview
+### File System Examples
 
-### Local vs. Remote Mode
+```javascript
+// Read a file
+{
+  "name": "read_file",
+  "arguments": {
+    "path": "C:/Users/YourUsername/Documents/example.txt"
+  }
+}
 
-The server can operate in two modes:
+// Write a file
+{
+  "name": "write_file",
+  "arguments": {
+    "path": "C:/Users/YourUsername/Documents/new-file.txt",
+    "content": "This is the content of the file."
+  }
+}
 
-#### Local Mode
-- Default when running directly from the command line
-- Automatically opens generated images in your default browser
-- Uses `file://` protocol to display images in HTML preview
+// List directory contents
+{
+  "name": "list_directory",
+  "arguments": {
+    "path": "C:/Users/YourUsername/Documents"
+  }
+}
 
-#### Remote Mode 
-- Activated by setting `IS_REMOTE=true` environment variable
-- Doesn't attempt to open browser (useful for headless environments)
-- Creates download links in the HTML preview
-- Designed for Claude Desktop integration
+// Create a directory
+{
+  "name": "create_directory",
+  "arguments": {
+    "path": "C:/Users/YourUsername/Documents/new-folder"
+  }
+}
 
-To enable remote mode, set the environment variable in your Claude Desktop config:
-```json
-"env": {
-  "GEMINI_API_KEY": "your_key_here",
-  "IS_REMOTE": "true"
+// Search for files
+{
+  "name": "search_files",
+  "arguments": {
+    "path": "C:/Users/YourUsername/Documents",
+    "pattern": "*.txt",
+    "excludePatterns": ["temp*", "*.tmp"]
+  }
 }
 ```
 
-### Cross-Platform Path Handling
+## 🔒 Security Features
 
-The server supports two methods for handling file paths across different operating systems:
+The server implements several security measures:
 
-#### 1. Using Smithery Package (Recommended)
-When using the MCP server through Claude Desktop, the Smithery package provides automatic OS detection and path handling:
+1. **Path Validation**: All file paths are validated to ensure they are within allowed directories.
+2. **Allowed Directories**: Only directories explicitly set in the `ALLOWED_DIRECTORIES` environment variable can be accessed.
+3. **Symlink Protection**: Prevents access to directories outside the allowed scope via symlinks.
+4. **Controlled Logging**: Debug logs are disabled by default to prevent information leakage.
 
-- **Windows**: Saves to User's Desktop folder by default
-- **macOS**: Uses Desktop folder in the user's home directory
-- **Linux**: Saves to a folder in the user's home directory
+## ⚙️ Configuration Options
 
-Key configuration options:
-- `crossPlatformPaths`: Enables automatic path normalization 
-- `saveToDesktop`: Ensures files are saved to the desktop on all platforms
-- `DETECT_OS_PATHS`: Environment variable that activates OS-specific path detection
+### Environment Variables
 
-#### 2. Direct Node.js Usage (Advanced)
-When running the server directly via Node.js, it implements custom path handling logic:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GEMINI_API_KEY` | Google Gemini API key for image generation | (Required) |
+| `ALLOWED_DIRECTORIES` | Comma-separated list of allowed file system paths | User's home dir, current dir |
+| `IS_REMOTE` | Run in remote mode without browser opening | false |
+| `SAVE_TO_DESKTOP` | Force saving to desktop directory | false |
+| `DETECT_OS_PATHS` | Enable OS-specific path detection | true |
+| `DEBUG` | Enable verbose debug logging | false |
 
-- **Windows**: Tries Desktop first (USERPROFILE\Desktop), then Documents (USERPROFILE\Documents)
-- **macOS**: Uses Desktop in HOME directory, falls back to Documents
-- **Linux**: Tries Desktop, falls back to user's HOME directory
-- **Fallback**: Uses current working directory's "output" folder if all else fails
+## 🛠️ Troubleshooting
 
-For direct usage, environment variables provide additional control:
-- `OUTPUT_DIR`: Specify exact save location (used first if set and writable)
-- `SAVE_TO_DESKTOP`: Force saving to Desktop folder across all OS platforms 
+### Common Issues:
 
-Additional features:
-- **Write permission checking**: Tests if directories are actually writable
-- **Automatic directory creation**: Creates folders if they don't exist
-- **Robust error handling**: Falls back gracefully if primary save locations fail
-- **Path normalization**: Properly handles backslashes and forward slashes by OS
-- **Diagnostic logging**: Shows detected OS and save paths for troubleshooting
+1. **JSON Parsing Errors in Claude**:
+   - Ensure `DEBUG` is set to "false" to prevent logs from interfering with JSON communication
+   - Check for proper JSON formatting in the Claude configuration
 
-### Example Prompts
+2. **File Access Denied**:
+   - Verify that the paths you're trying to access are included in `ALLOWED_DIRECTORIES`
+   - Check file permissions on the target files/directories
 
-- "A group of happy animals having a picnic in a magical forest"
-- "A young astronaut exploring a colorful alien planet"
-- "A magical fairy teaching baby dragons to fly"
-- "A friendly robot helping children build a treehouse"
-
-## 📁 Output Structure
-
-```
-output/
-├── image_name.png          # Generated image
-└── image_name_preview.html # HTML preview
-```
-
-## 🔒 Security Notes
-
-- Keep your API keys secure and never commit them to version control
-- Use environment variables for sensitive configuration
-- Run the server in a secure environment
+3. **Images Not Saving**:
+   - Set `SAVE_TO_DESKTOP` to "true" to ensure images save to the desktop
+   - Check desktop path detection in the server logs (enable DEBUG temporarily)
 
 ## 📄 License
 
-[Your chosen license]
+[MIT License](LICENSE)
 
 ## 🤝 Contributing
 

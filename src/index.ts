@@ -7,22 +7,34 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { GoogleGenAI } from '@google/genai';
-import { writeFileSync, existsSync, mkdirSync, accessSync, constants } from 'fs';
-import { join, dirname, resolve, normalize, sep, basename } from 'path';
-import dotenv from 'dotenv';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { homedir, platform, userInfo } from 'os';
 import * as fs from 'fs';
+import * as fsPromises from 'fs/promises';
 import * as path from 'path';
+import * as util from 'util';
+import * as os from 'os';
+import dotenv from 'dotenv';
+import { execFile } from 'child_process';
+import { minimatch } from 'minimatch';
 
-const execAsync = promisify(exec);
-
+// Load environment variables
 dotenv.config();
+
+// Debug mode flag
+const DEBUG = process.env.DEBUG === 'true';
+
+// Debug logger function to avoid polluting stdout/stderr
+function debugLog(...args: any[]): void {
+  if (DEBUG) {
+    console.error('[DEBUG]', ...args);
+  }
+}
+
+// Initialize promisify for exec
+const execFileAsync = util.promisify(execFile);
 
 // Server initialization
 const server = new Server({
-  name: "mcp-3d-cartoon-server",
+  name: "mcp-cartoon-filesystem-server",
   version: "1.0.0",
 }, {
   capabilities: {
@@ -36,7 +48,7 @@ if (!API_KEY) {
   throw new Error("GEMINI_API_KEY environment variable is required");
 }
 
-const ai = new GoogleGenAI({
+const genAI = new GoogleGenAI({
   apiKey: API_KEY
 });
 
@@ -50,300 +62,127 @@ const config = {
 
 const model = 'gemini-2.0-flash-exp-image-generation';
 
-// Define available tools
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [{
-      name: "generate_3d_cartoon",
-      description: "Generates a 3D style cartoon image for kids based on the given prompt",
-      inputSchema: {
-        type: "object",
-        properties: {
-          prompt: {
-            type: "string",
-            description: "The prompt describing the 3D cartoon image to generate"
-          },
-          fileName: {
-            type: "string",
-            description: "The name of the output file (without extension)"
-          }
-        },
-        required: ["prompt", "fileName"]
-      }
-    }]
-  };
-});
+// Security utilities for file system operations
+function normalizePath(p: string): string {
+  return path.normalize(p);
+}
 
-// Handle tool execution
-server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
-  if (request.params.name === "generate_3d_cartoon") {
-    const { prompt, fileName } = request.params.arguments as { prompt: string; fileName: string };
-    
-    // Add 3D cartoon-specific context to the prompt
-    const cartoonPrompt = `Generate a 3D style cartoon image for kids: ${prompt}. The image should be colorful, playful, and child-friendly. Use bright colors, soft shapes, and a fun, engaging style that appeals to children. Make it look like a high-quality 3D animated character or scene.`;
-    
-    const contents = [
-      {
-        role: 'user',
-        parts: [
-          {
-            text: cartoonPrompt,
-          },
-        ],
-      },
+function expandHome(filepath: string): string {
+  if (filepath.startsWith('~/') || filepath === '~') {
+    return path.join(os.homedir(), filepath.slice(1));
+  }
+  return filepath;
+}
+
+// Get allowed directories from environment or use default
+const allowedDirectories = process.env.ALLOWED_DIRECTORIES
+  ? process.env.ALLOWED_DIRECTORIES.split(',').map(dir => normalizePath(path.resolve(expandHome(dir))))
+  : [
+      normalizePath(path.resolve(os.homedir())),
+      normalizePath(path.resolve(process.cwd()))
     ];
 
+// Only log in debug mode
+if (DEBUG) {
+  console.error("Allowed directories:", allowedDirectories);
+}
+
+// Security validation function
+async function validatePath(requestedPath: string): Promise<string> {
+  const expandedPath = expandHome(requestedPath);
+  const absolute = path.isAbsolute(expandedPath)
+    ? path.resolve(expandedPath)
+    : path.resolve(process.cwd(), expandedPath);
+
+  const normalizedRequested = normalizePath(absolute);
+
+  // Check if path is within allowed directories
+  const isAllowed = allowedDirectories.some(dir => normalizedRequested.startsWith(dir));
+  if (!isAllowed) {
+    throw new Error(`Access denied - path outside allowed directories: ${absolute} not in ${allowedDirectories.join(', ')}`);
+  }
+
+  // Handle symlinks by checking their real path
+  try {
+    const realPath = await fsPromises.realpath(absolute);
+    const normalizedReal = normalizePath(realPath);
+    const isRealPathAllowed = allowedDirectories.some(dir => normalizedReal.startsWith(dir));
+    if (!isRealPathAllowed) {
+      throw new Error("Access denied - symlink target outside allowed directories");
+    }
+    return realPath;
+  } catch (error) {
+    // For new files that don't exist yet, verify parent directory
+    const parentDir = path.dirname(absolute);
     try {
-      const response = await ai.models.generateContentStream({
-        model,
-        config,
-        contents,
-      });
-
-      for await (const chunk of response) {
-        if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
-          continue;
-        }
-        if (chunk.candidates[0].content.parts[0].inlineData) {
-          const inlineData = chunk.candidates[0].content.parts[0].inlineData;
-          const buffer = Buffer.from(inlineData.data || '', 'base64');
-          
-          // Create an output filename with timestamp for uniqueness
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const outputFileName = fileName.endsWith('.png') 
-            ? fileName 
-            : `${fileName}_${timestamp}.png`;
-          
-          const isRemote = process.env.IS_REMOTE === 'true';
-          
-          // Find appropriate save location with OS detection
-          const { savedPath, publicUrl } = await saveImageWithProperPath(buffer, outputFileName, isRemote);
-          
-          // Create preview HTML with appropriate image path
-          const previewHtml = createImagePreview(savedPath, publicUrl, isRemote);
-
-          // Create and save HTML file with same path handling
-          const htmlFileName = `${outputFileName.replace('.png', '')}_preview.html`;
-          const htmlPath = join(dirname(savedPath), htmlFileName);
-          
-          // Ensure directory exists before writing
-          ensureDirectoryExists(dirname(htmlPath));
-          writeFileSync(htmlPath, previewHtml, 'utf8');
-
-          // Only try to open in browser if not in remote mode
-          if (!isRemote) {
-            try {
-              await openInBrowser(htmlPath);
-            } catch (error) {
-              console.warn('Could not open browser automatically:', error);
-            }
-          }
-
-          return {
-            toolResult: {
-              success: true,
-              imagePath: savedPath,
-              htmlPath: htmlPath,
-              publicUrl: publicUrl || savedPath,
-              content: [
-                {
-                  type: "text",
-                  text: `Image saved to: ${savedPath}\n${isRemote ? 'Remote mode: browser preview not opened' : 'Preview opened in browser'}`
-                },
-                {
-                  type: "html",
-                  html: previewHtml
-                }
-              ],
-              message: isRemote ? "Image generated (remote mode)" : "Image generated and preview opened in browser"
-            }
-          };
-        }
+      const realParentPath = await fsPromises.realpath(parentDir);
+      const normalizedParent = normalizePath(realParentPath);
+      const isParentAllowed = allowedDirectories.some(dir => normalizedParent.startsWith(dir));
+      if (!isParentAllowed) {
+        throw new Error("Access denied - parent directory outside allowed directories");
       }
-      
-      throw new McpError(ErrorCode.InternalError, "No image data received from the API");
-    } catch (error) {
-      console.error('Error generating image:', error);
-      if (error instanceof Error) {
-        throw new McpError(ErrorCode.InternalError, `Failed to generate image: ${error.message}`);
-      }
-      throw new McpError(ErrorCode.InternalError, 'An unknown error occurred');
+      return absolute;
+    } catch {
+      throw new Error(`Parent directory does not exist: ${parentDir}`);
     }
   }
-  
-  throw new McpError(ErrorCode.InternalError, "Tool not found");
-});
+}
 
-// Start the server
-const transport = new StdioServerTransport();
-await server.connect(transport);
-
-// Improved OS detection and path handling functions
+// OS path handling functions
 function getDesktopPath(): string {
   try {
-    // Get current username and home directory
-    const home = homedir();
-    const username = userInfo().username;
+    const home = os.homedir();
+    const username = os.userInfo().username;
     
-    console.log(`Detected username: ${username}`);
-    console.log(`Detected home directory: ${home}`);
+    // Use debug logging instead of regular console.log
+    debugLog(`Detected username: ${username}`);
+    debugLog(`Detected home directory: ${home}`);
     
-    // Check if saveToDesktop is explicitly requested
-    const saveToDesktop = process.env.SAVE_TO_DESKTOP === 'true';
-    
-    if (platform() === 'win32') {
+    if (os.platform() === 'win32') {
       // Windows - User profile desktop (C:\Users\Username\Desktop)
       const desktopPath = process.env.USERPROFILE 
         ? path.join(process.env.USERPROFILE, 'Desktop')
         : path.join('C:', 'Users', username, 'Desktop');
       
-      console.log(`Windows desktop path: ${desktopPath}`);
+      debugLog(`Windows desktop path: ${desktopPath}`);
       
       // Verify the path exists
       if (fs.existsSync(desktopPath)) {
         return desktopPath;
       } else {
-        console.warn(`Desktop path not found: ${desktopPath}, falling back to home`);
+        debugLog(`Desktop path not found: ${desktopPath}, falling back to home`);
         return home;
       }
-    } else if (platform() === 'darwin') {
+    } else if (os.platform() === 'darwin') {
       // macOS
       const desktopPath = path.join(home, 'Desktop');
-      console.log(`macOS desktop path: ${desktopPath}`);
+      debugLog(`macOS desktop path: ${desktopPath}`);
       return desktopPath;
     } else {
       // Linux - Use XDG if available
       const xdgDesktop = process.env.XDG_DESKTOP_DIR;
       if (xdgDesktop && fs.existsSync(xdgDesktop)) {
-        console.log(`Linux XDG desktop path: ${xdgDesktop}`);
+        debugLog(`Linux XDG desktop path: ${xdgDesktop}`);
         return xdgDesktop;
       }
       const linuxDesktop = path.join(home, 'Desktop');
       if (fs.existsSync(linuxDesktop)) {
-        console.log(`Linux desktop path: ${linuxDesktop}`);
+        debugLog(`Linux desktop path: ${linuxDesktop}`);
         return linuxDesktop;
       }
-      console.log(`Using home directory: ${home}`);
+      debugLog(`Using home directory: ${home}`);
       return home;
     }
   } catch (error) {
     console.error('Error detecting desktop path:', error);
-    return homedir();
-  }
-}
-
-function getDocumentsPath(): string {
-  try {
-    const home = homedir();
-    const username = userInfo().username;
-    
-    if (platform() === 'win32') {
-      // Windows - User profile documents (C:\Users\Username\Documents)
-      const documentsPath = process.env.USERPROFILE 
-        ? path.join(process.env.USERPROFILE, 'Documents')
-        : path.join('C:', 'Users', username, 'Documents');
-      
-      console.log(`Windows documents path: ${documentsPath}`);
-      
-      // Verify the path exists
-      if (fs.existsSync(documentsPath)) {
-        return documentsPath;
-      } else {
-        console.warn(`Documents path not found: ${documentsPath}, falling back to home`);
-        return home;
-      }
-    } else if (platform() === 'darwin') {
-      // macOS
-      return path.join(home, 'Documents');
-    } else {
-      // Linux - Use XDG if available or default to home
-      const xdgDocuments = process.env.XDG_DOCUMENTS_DIR;
-      if (xdgDocuments && fs.existsSync(xdgDocuments)) {
-        return xdgDocuments;
-      }
-      
-      const linuxDocuments = path.join(home, 'Documents');
-      if (fs.existsSync(linuxDocuments)) {
-        return linuxDocuments;
-      }
-      
-      return home;
-    }
-  } catch (error) {
-    console.error('Error detecting documents path:', error);
-    return homedir();
-  }
-}
-
-function getBestSavePath(): string {
-  try {
-    // First check for explicit settings
-    if (process.env.OUTPUT_DIR) {
-      const outputDir = resolve(process.env.OUTPUT_DIR);
-      if (isPathWriteable(outputDir)) {
-        return outputDir;
-      }
-    }
-    
-    // Check if saveToDesktop is explicitly requested
-    const saveToDesktop = process.env.SAVE_TO_DESKTOP === 'true';
-    if (saveToDesktop) {
-      const desktopPath = getDesktopPath();
-      const targetDir = join(desktopPath, 'mcp-3d-cartoons');
-      ensureDirectoryExists(targetDir);
-      return targetDir;
-    }
-    
-    // Try desktop first
-    const desktopPath = join(getDesktopPath(), 'mcp-3d-cartoons');
-    if (isPathWriteable(dirname(desktopPath))) {
-      ensureDirectoryExists(desktopPath);
-      return desktopPath;
-    }
-    
-    // Then documents
-    const docsPath = join(getDocumentsPath(), 'mcp-3d-cartoons');
-    if (isPathWriteable(dirname(docsPath))) {
-      ensureDirectoryExists(docsPath);
-      return docsPath;
-    }
-    
-    // Finally fallback to home directory
-    const homePath = join(homedir(), 'mcp-3d-cartoons');
-    ensureDirectoryExists(homePath);
-    return homePath;
-  } catch (error) {
-    console.warn('Error finding best save path, falling back to output directory in CWD:', error);
-    const fallbackPath = join(process.cwd(), 'output');
-    ensureDirectoryExists(fallbackPath);
-    return fallbackPath;
-  }
-}
-
-function isPathWriteable(path: string): boolean {
-  try {
-    if (!existsSync(path)) {
-      // If path doesn't exist, try to make it
-      try {
-        ensureDirectoryExists(path);
-        return true;
-      } catch (e) {
-        return false;
-      }
-    }
-    
-    // Test write access
-    accessSync(path, constants.W_OK);
-    return true;
-  } catch (error) {
-    return false;
+    return os.homedir();
   }
 }
 
 function ensureDirectoryExists(dirPath: string): void {
-  if (!existsSync(dirPath)) {
+  if (!fs.existsSync(dirPath)) {
     try {
-      mkdirSync(dirPath, { recursive: true });
+      fs.mkdirSync(dirPath, { recursive: true });
     } catch (error) {
       console.error(`Failed to create directory "${dirPath}":`, error);
       throw error;
@@ -351,128 +190,428 @@ function ensureDirectoryExists(dirPath: string): void {
   }
 }
 
-async function saveImageWithProperPath(buffer: Buffer, fileName: string, isRemote: boolean = false): Promise<{savedPath: string, publicUrl?: string}> {
+async function saveImageWithProperPath(buffer: Buffer, fileName: string): Promise<{savedPath: string}> {
   try {
-    // Get best save path based on OS and permissions
-    const saveDir = getBestSavePath();
+    // Get best save path
+    const saveDir = path.join(getDesktopPath(), 'generated-images');
     
-    // Log for debugging
-    console.log(`Saving to directory: ${saveDir}`);
-    console.log(`Platform: ${platform()}`);
-    console.log(`Home directory: ${homedir()}`);
-    console.log(`Username: ${userInfo().username}`);
+    // Replace console.log with debugLog
+    debugLog(`Saving to directory: ${saveDir}`);
+    debugLog(`Platform: ${os.platform()}`);
+    debugLog(`Home directory: ${os.homedir()}`);
+    debugLog(`Username: ${os.userInfo().username}`);
     
     // Ensure save directory exists
     ensureDirectoryExists(saveDir);
     
     // Create full path and normalize for OS
-    const outputPath = normalize(join(saveDir, fileName));
+    const outputPath = path.normalize(path.join(saveDir, fileName));
     
     // Save the file
-    writeFileSync(outputPath, buffer);
-    console.log(`Image saved successfully to: ${outputPath}`);
+    fs.writeFileSync(outputPath, buffer);
+    debugLog(`Image saved successfully to: ${outputPath}`);
     
-    // Create HTML file in the same directory
-    const htmlFileName = `${fileName.replace('.png', '')}_preview.html`;
-    const htmlPath = join(saveDir, htmlFileName);
-    
-    // For remote mode, create a publicUrl
-    let publicUrl = undefined;
-    if (isRemote) {
-      // In remote mode, the path needs to be accessible to the client
-      publicUrl = `/output/${fileName}`;
-      console.log(`Public URL for remote access: ${publicUrl}`);
-    }
-    
-    return { savedPath: outputPath, publicUrl };
+    return { savedPath: outputPath };
   } catch (error) {
     console.error('Error saving image:', error);
     // Fallback to output directory
-    const fallbackDir = join(process.cwd(), 'output');
+    const fallbackDir = path.join(process.cwd(), 'output');
     ensureDirectoryExists(fallbackDir);
-    const fallbackPath = join(fallbackDir, fileName);
-    writeFileSync(fallbackPath, buffer);
-    console.log(`Fallback save to: ${fallbackPath}`);
+    const fallbackPath = path.join(fallbackDir, fileName);
+    fs.writeFileSync(fallbackPath, buffer);
+    debugLog(`Fallback save to: ${fallbackPath}`);
     return { savedPath: fallbackPath };
   }
-}
-
-function createImagePreview(imagePath: string, publicUrl?: string, isRemote: boolean = false): string {
-  // Normalize paths for consistent URL handling
-  let normalizedPath = normalize(imagePath).replace(/\\/g, '/');
-  
-  // For remote mode, use publicUrl if available, otherwise local file
-  const imageUrl = isRemote && publicUrl
-    ? publicUrl 
-    : `file://${normalizedPath}`;
-  
-  const downloadButton = isRemote 
-    ? `<div style="margin-top: 15px; text-align: center;">
-         <a href="${imageUrl}" download="${basename(normalizedPath)}" 
-            style="display: inline-block; background: #4CAF50; color: white; 
-                   padding: 10px 20px; text-decoration: none; border-radius: 4px; 
-                   font-weight: bold;">
-           Download Image
-         </a>
-       </div>`
-    : '';
-
-  const osInfo = `
-    <div style="margin-top: 10px; font-size: 12px; color: #666;">
-      <p>OS: ${platform()}</p>
-      <p>Save directory: ${dirname(normalizedPath)}</p>
-    </div>
-  `;
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>3D Cartoon Image</title>
-</head>
-<body style="font-family: Arial, sans-serif; background-color: #f5f5f5; margin: 0; padding: 20px;">
-  <div style="max-width: 800px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
-    <div style="padding: 20px; background: #f0f9ff; border-bottom: 1px solid #e0e0e0;">
-      <h1 style="margin: 0; color: #333; font-size: 24px;">3D Cartoon Image</h1>
-      <p style="margin: 5px 0 0; color: #666;">Saved to: ${normalizedPath}</p>
-    </div>
-    <div style="padding: 20px;">
-      <div style="border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <img src="${imageUrl}" alt="Generated image" style="width: 100%; height: auto; display: block;">
-      </div>
-      ${downloadButton}
-      ${osInfo}
-    </div>
-  </div>
-</body>
-</html>
-`;
 }
 
 async function openInBrowser(filePath: string): Promise<void> {
   try {
     // Check for headless environment
-    if (process.env.DISPLAY === undefined && platform() !== 'win32' && platform() !== 'darwin') {
+    if (process.env.DISPLAY === undefined && os.platform() !== 'win32' && os.platform() !== 'darwin') {
       console.log('Headless environment detected, skipping browser open');
       return;
     }
     
     // Ensure path is properly formatted for the OS
-    const normalizedPath = normalize(filePath);
+    const normalizedPath = path.normalize(filePath);
     
     // Different commands for different OSes
-    const command = platform() === 'win32' 
-      ? `start "" "${normalizedPath}"`
-      : platform() === 'darwin'
-        ? `open "${normalizedPath}"`
-        : `xdg-open "${normalizedPath}"`;
+    const command = os.platform() === 'win32' 
+      ? 'explorer'
+      : os.platform() === 'darwin'
+        ? 'open'
+        : 'xdg-open';
+
+    const args = [normalizedPath];
     
-    await execAsync(command);
+    await execFileAsync(command, args);
     console.log(`Opened in browser: ${normalizedPath}`);
   } catch (error) {
     console.error('Error opening file in browser:', error);
     console.log('Unable to open browser automatically. File saved at:', filePath);
   }
+}
+
+// Define available tools
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  return {
+    tools: [
+      // Image generation tool
+      {
+        name: "generate_3d_cartoon",
+        description: "Generates a 3D style cartoon image for kids based on the given prompt",
+        inputSchema: {
+          type: "object",
+          properties: {
+            prompt: {
+              type: "string",
+              description: "The prompt describing the 3D cartoon image to generate"
+            },
+            fileName: {
+              type: "string",
+              description: "The name of the output file (without extension)"
+            }
+          },
+          required: ["prompt", "fileName"]
+        }
+      },
+      // File system tools
+      {
+        name: "read_file",
+        description: "Read the contents of a file",
+        inputSchema: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description: "Path to the file to read"
+            }
+          },
+          required: ["path"]
+        }
+      },
+      {
+        name: "write_file",
+        description: "Write content to a file",
+        inputSchema: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description: "Path to the file to write"
+            },
+            content: {
+              type: "string",
+              description: "Content to write to the file"
+            }
+          },
+          required: ["path", "content"]
+        }
+      },
+      {
+        name: "list_directory",
+        description: "List the contents of a directory",
+        inputSchema: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description: "Path to the directory to list"
+            }
+          },
+          required: ["path"]
+        }
+      },
+      {
+        name: "create_directory",
+        description: "Create a new directory",
+        inputSchema: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description: "Path to the directory to create"
+            }
+          },
+          required: ["path"]
+        }
+      },
+      {
+        name: "search_files",
+        description: "Search for files matching a pattern",
+        inputSchema: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description: "Base directory to search from"
+            },
+            pattern: {
+              type: "string",
+              description: "Search pattern (glob format)"
+            },
+            excludePatterns: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Patterns to exclude from search (glob format)"
+            }
+          },
+          required: ["path", "pattern"]
+        }
+      }
+    ]
+  };
+});
+
+// File system operation utilities
+async function searchFiles(rootPath: string, pattern: string, excludePatterns: string[] = []): Promise<string[]> {
+  const results: string[] = [];
+
+  async function search(currentPath: string) {
+    const entries = await fsPromises.readdir(currentPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(currentPath, entry.name);
+
+      try {
+        // Validate each path before processing
+        await validatePath(fullPath);
+
+        // Check if path matches any exclude pattern
+        const relativePath = path.relative(rootPath, fullPath);
+        const shouldExclude = excludePatterns.some(pattern => {
+          const globPattern = pattern.includes('*') ? pattern : `**/${pattern}/**`;
+          return minimatch(relativePath, globPattern, { dot: true });
+        });
+
+        if (shouldExclude) {
+          continue;
+        }
+
+        // Check if the path matches the search pattern
+        if (minimatch(entry.name, pattern, { nocase: true })) {
+          results.push(fullPath);
+        }
+
+        if (entry.isDirectory()) {
+          await search(fullPath);
+        }
+      } catch (error) {
+        // Skip invalid paths during search
+        continue;
+      }
+    }
+  }
+
+  await search(rootPath);
+  return results;
+}
+
+// Handle tool execution
+server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
+  const toolName = request.params.name;
+  const args = request.params.arguments;
+
+  try {
+    switch (toolName) {
+      case "generate_3d_cartoon": {
+        const { prompt, fileName } = args;
+        
+        // Add 3D cartoon-specific context to the prompt
+        const cartoonPrompt = `Generate a 3D style cartoon image for kids: ${prompt}. The image should be colorful, playful, and child-friendly. Use bright colors, soft shapes, and a fun, engaging style that appeals to children. Make it look like a high-quality 3D animated character or scene.`;
+        
+        const contents = [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: cartoonPrompt,
+              },
+            ],
+          },
+        ];
+
+        try {
+          const response = await genAI.models.generateContentStream({
+            model,
+            config,
+            contents,
+          });
+
+          for await (const chunk of response) {
+            if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
+              continue;
+            }
+            if (chunk.candidates[0].content.parts[0].inlineData) {
+              const inlineData = chunk.candidates[0].content.parts[0].inlineData;
+              const buffer = Buffer.from(inlineData.data || '', 'base64');
+              
+              // Create an output filename with timestamp for uniqueness
+              const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+              const outputFileName = fileName.endsWith('.png') 
+                ? fileName 
+                : `${fileName}_${timestamp}.png`;
+              
+              // Find appropriate save location
+              const { savedPath } = await saveImageWithProperPath(buffer, outputFileName);
+              
+              // Create simple HTML preview
+              const htmlContent = `
+              <!DOCTYPE html>
+              <html>
+              <head>
+                <title>3D Cartoon Preview</title>
+                <style>
+                  body { font-family: Arial, sans-serif; margin: 20px; }
+                  .image-container { max-width: 800px; margin: 0 auto; }
+                  img { max-width: 100%; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                  .prompt { margin: 10px 0; color: #666; }
+                  .path { font-family: monospace; margin: 10px 0; }
+                </style>
+              </head>
+              <body>
+                <h1>3D Cartoon Image</h1>
+                <div class="prompt">Prompt: ${prompt}</div>
+                <div class="path">Saved to: ${savedPath}</div>
+                <div class="image-container">
+                  <img src="file://${savedPath}" alt="Generated cartoon image">
+                </div>
+              </body>
+              </html>
+              `;
+
+              // Create and save HTML file
+              const htmlFileName = `${outputFileName.replace('.png', '')}_preview.html`;
+              const htmlPath = path.join(path.dirname(savedPath), htmlFileName);
+              
+              // Ensure directory exists before writing
+              ensureDirectoryExists(path.dirname(htmlPath));
+              fs.writeFileSync(htmlPath, htmlContent, 'utf8');
+
+              // Try to open in browser
+              try {
+                await openInBrowser(htmlPath);
+              } catch (error) {
+                console.warn('Could not open browser automatically:', error);
+              }
+
+              return {
+                toolResult: {
+                  success: true,
+                  imagePath: savedPath,
+                  htmlPath: htmlPath,
+                  content: [
+                    {
+                      type: "text",
+                      text: `Image saved to: ${savedPath}\nPreview HTML: ${htmlPath}`
+                    }
+                  ],
+                  message: "Image generated and saved"
+                }
+              };
+            }
+          }
+          
+          throw new McpError(ErrorCode.InternalError, "No image data received from the API");
+        } catch (error) {
+          console.error('Error generating image:', error);
+          if (error instanceof Error) {
+            throw new McpError(ErrorCode.InternalError, `Failed to generate image: ${error.message}`);
+          }
+          throw new McpError(ErrorCode.InternalError, 'An unknown error occurred');
+        }
+      }
+      
+      case "read_file": {
+        const validPath = await validatePath(args.path);
+        const content = await fsPromises.readFile(validPath, "utf-8");
+        return {
+          toolResult: {
+            success: true,
+            content: [{ type: "text", text: content }],
+            message: `File read successfully from: ${args.path}`
+          }
+        };
+      }
+
+      case "write_file": {
+        const validPath = await validatePath(args.path);
+        await fsPromises.writeFile(validPath, args.content, "utf-8");
+        return {
+          toolResult: {
+            success: true,
+            content: [{ type: "text", text: `File written successfully to: ${args.path}` }],
+            message: `File saved to: ${args.path}`
+          }
+        };
+      }
+
+      case "list_directory": {
+        const validPath = await validatePath(args.path);
+        const entries = await fsPromises.readdir(validPath, { withFileTypes: true });
+        const formatted = entries
+          .map((entry) => `${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`)
+          .join("\n");
+        return {
+          toolResult: {
+            success: true,
+            content: [{ type: "text", text: formatted }],
+            message: `Listed directory: ${args.path}`
+          }
+        };
+      }
+
+      case "create_directory": {
+        const validPath = await validatePath(args.path);
+        await fsPromises.mkdir(validPath, { recursive: true });
+        return {
+          toolResult: {
+            success: true,
+            content: [{ type: "text", text: `Directory created: ${args.path}` }],
+            message: `Created directory: ${args.path}`
+          }
+        };
+      }
+
+      case "search_files": {
+        const validPath = await validatePath(args.path);
+        const excludePatterns = args.excludePatterns || [];
+        const results = await searchFiles(validPath, args.pattern, excludePatterns);
+        return {
+          toolResult: {
+            success: true,
+            content: [{ 
+              type: "text", 
+              text: results.length > 0 ? results.join("\n") : "No matching files found"
+            }],
+            message: `Found ${results.length} matching files`
+          }
+        };
+      }
+
+      default:
+        throw new McpError(ErrorCode.InternalError, `Unknown tool: ${toolName}`);
+    }
+  } catch (error) {
+    console.error(`Error processing ${toolName}:`, error);
+    if (error instanceof McpError) {
+      throw error;
+    }
+    throw new McpError(
+      ErrorCode.InternalError,
+      `Error processing request: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+});
+
+// Start the server
+const transport = new StdioServerTransport();
+await server.connect(transport);
+
+// Only log in debug mode
+if (DEBUG) {
+  console.error("MCP Cartoon & Filesystem Server running");
+  console.error(`Allowed directories: ${allowedDirectories.join(', ')}`);
 } 

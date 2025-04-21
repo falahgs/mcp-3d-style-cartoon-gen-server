@@ -19,9 +19,10 @@
   "dependencies": {
     "@google/genai": "^0.8.0",
     "@google/generative-ai": "^0.24.0",
-    "@modelcontextprotocol/sdk": "^0.6.1",
+    "@modelcontextprotocol/sdk": "^1.4.1",
     "dotenv": "^16.5.0",
     "mime": "^3.0.0",
+    "minimatch": "^10.0.1",
     "puppeteer": "^24.6.1",
     "zod": "^3.24.3"
   },
