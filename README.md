@@ -120,8 +120,31 @@ The server provides a single tool for 3D cartoon image generation:
    - Generate the image using Gemini AI
    - Save it as a PNG file in the `output` directory
    - Create an HTML preview
-   - Open the preview in your default browser
+   - Open the preview in your default browser (in local mode)
    - Return both the image path and preview
+
+### Local vs. Remote Mode
+
+The server can operate in two modes:
+
+#### Local Mode
+- Default when running directly from the command line
+- Automatically opens generated images in your default browser
+- Uses `file://` protocol to display images in HTML preview
+
+#### Remote Mode 
+- Activated by setting `IS_REMOTE=true` environment variable
+- Doesn't attempt to open browser (useful for headless environments)
+- Creates download links in the HTML preview
+- Designed for Claude Desktop integration
+
+To enable remote mode, set the environment variable in your Claude Desktop config:
+```json
+"env": {
+  "GEMINI_API_KEY": "your_key_here",
+  "IS_REMOTE": "true"
+}
+```
 
 ### Example Prompts
 

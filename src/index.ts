@@ -106,35 +106,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           // Save the image
           const outputFileName = fileName.endsWith('.png') ? fileName : `${fileName}.png`;
-          const savedPath = await saveImageBuffer(buffer, outputFileName);
+          const isRemote = process.env.IS_REMOTE === 'true';
+          const { savedPath, publicUrl } = await saveImageBuffer(buffer, outputFileName, isRemote);
           
-          // Create preview HTML
-          const previewHtml = createImagePreview(savedPath);
+          // Create preview HTML with appropriate image path
+          const previewHtml = createImagePreview(savedPath, publicUrl, isRemote);
 
           // Create and save HTML file
           const htmlFileName = `${fileName}_preview.html`;
           const htmlPath = join(process.cwd(), 'output', htmlFileName);
           writeFileSync(htmlPath, previewHtml, 'utf8');
 
-          // Open in browser
-          await openInBrowser(htmlPath);
+          // Only try to open in browser if not in remote mode
+          if (!isRemote) {
+            try {
+              await openInBrowser(htmlPath);
+            } catch (error) {
+              console.warn('Could not open browser automatically:', error);
+            }
+          }
 
           return {
             toolResult: {
               success: true,
               imagePath: savedPath,
               htmlPath: htmlPath,
+              publicUrl: publicUrl || savedPath,
               content: [
                 {
                   type: "text",
-                  text: `Image saved to: ${savedPath}\nPreview opened in browser: ${htmlPath}`
+                  text: `Image saved to: ${savedPath}\n${isRemote ? 'Remote mode: browser preview not opened' : 'Preview opened in browser'}`
                 },
                 {
                   type: "html",
                   html: previewHtml
                 }
               ],
-              message: "Image generated and preview opened in browser"
+              message: isRemote ? "Image generated (remote mode)" : "Image generated and preview opened in browser"
             }
           };
         }
@@ -157,29 +165,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-// Utility functions
-async function saveImageBuffer(buffer: Buffer, fileName: string): Promise<string> {
+// Updated utility functions
+async function saveImageBuffer(buffer: Buffer, fileName: string, isRemote: boolean = false): Promise<{savedPath: string, publicUrl?: string}> {
+  // Ensure output directory exists
   const outputDir = join(process.cwd(), 'output');
   if (!existsSync(outputDir)) {
     mkdirSync(outputDir, { recursive: true });
   }
   
+  // Save the image file
   const outputPath = join(outputDir, fileName);
   writeFileSync(outputPath, buffer);
-  return outputPath;
+  
+  // For remote mode, we could return a public URL if available
+  // This is a placeholder - in a real implementation you might upload to S3/etc
+  const publicUrl = isRemote ? `/output/${fileName}` : undefined;
+  
+  return { savedPath: outputPath, publicUrl };
 }
 
-function createImagePreview(imagePath: string): string {
+function createImagePreview(imagePath: string, publicUrl?: string, isRemote: boolean = false): string {
+  // For remote mode, use the publicUrl if available
+  // For local mode, use the file:// protocol
+  const imageUrl = isRemote && publicUrl 
+    ? publicUrl 
+    : `file://${imagePath}`;
+
+  // Add download button for remote usage
+  const downloadButton = isRemote 
+    ? `<div style="margin-top: 15px; text-align: center;">
+         <a href="${imageUrl}" download="${imagePath.split('/').pop()}" 
+            style="display: inline-block; background: #4CAF50; color: white; 
+                   padding: 10px 20px; text-decoration: none; border-radius: 4px; 
+                   font-weight: bold;">
+           Download Image
+         </a>
+       </div>`
+    : '';
+
   return `
-<div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;">
-  <div style="border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-    <img src="file://${imagePath}" alt="Generated image" style="width: 100%; height: auto; display: block;">
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Cartoon Image</title>
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f5f5f5; margin: 0; padding: 20px;">
+  <div style="max-width: 800px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+    <div style="padding: 20px; background: #f0f9ff; border-bottom: 1px solid #e0e0e0;">
+      <h1 style="margin: 0; color: #333; font-size: 24px;">3D Cartoon Image</h1>
+    </div>
+    <div style="padding: 20px;">
+      <div style="border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <img src="${imageUrl}" alt="Generated image" style="width: 100%; height: auto; display: block;">
+      </div>
+      ${downloadButton}
+    </div>
   </div>
-</div>`;
+</body>
+</html>
+`;
 }
 
 async function openInBrowser(filePath: string): Promise<void> {
   try {
+    // Check for headless environment
+    if (process.env.DISPLAY === undefined && process.platform !== 'win32' && process.platform !== 'darwin') {
+      console.log('Headless environment detected, skipping browser open');
+      return;
+    }
+    
     const command = process.platform === 'win32' 
       ? `start "" "${filePath}"`
       : process.platform === 'darwin'
@@ -189,6 +245,7 @@ async function openInBrowser(filePath: string): Promise<void> {
     await execAsync(command);
   } catch (error) {
     console.error('Error opening file in browser:', error);
-    throw new McpError(ErrorCode.InternalError, 'Failed to open file in browser');
+    // Don't throw - just log the error and continue
+    console.log('Unable to open browser automatically. File saved at:', filePath);
   }
 } 
