@@ -12,7 +12,7 @@ $config = @{
             env = @{
                 "GEMINI_API_KEY" = "AIzaSyBGskNtesKEZOghmEzQRAikKdxnq75XPA4"
                 "IS_REMOTE" = "true"
-                "SAVE_TO_DESKTOP" = "true"
+                "SAVE_TO_DESKTOP" = "false"
                 "DETECT_OS_PATHS" = "true"
                 "ALLOWED_DIRECTORIES" = "$env:USERPROFILE\Desktop,$env:USERPROFILE\Documents"
                 "DEBUG" = "false"
@@ -38,6 +38,7 @@ Set-Content -Path $configFile -Value $jsonContent -Encoding UTF8
 Write-Host "Claude Desktop configuration file has been fixed!"
 Write-Host "Saved to: $configFile"
 Write-Host "Server includes both 3D cartoon generation and file system tools"
+Write-Host "Images will be saved in the server's 'generated-images' directory"
 Write-Host ""
 Write-Host "Configuration content:"
 Get-Content $configFile 
