@@ -1,0 +1,14 @@
+{
+    "mcpServers": {
+      "mcp-3d-cartoon-server": {
+        "command": "node",
+        "args": [
+          "G:\\mcp-projects\\mcp-3d-style-cartoon-gen-server\\build\\index.js" 
+        ],
+        "env": {
+          "GEMINI_API_KEY": "---------------------------------",
+          "IS_REMOTE": "true"
+        }
+      }
+    }
+  }

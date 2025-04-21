@@ -1,0 +1,33 @@
+{
+  "name": "mcp-3d-cartoon-server",
+  "version": "0.1.0",
+  "description": "MCP server for generating 3D style cartoon images for kids using Gemini API",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mcp-3d-cartoon-server": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "inspector": "npx @modelcontextprotocol/inspector build/index.js"
+  },
+  "dependencies": {
+    "@google/genai": "^0.8.0",
+    "@google/generative-ai": "^0.24.0",
+    "@modelcontextprotocol/sdk": "^0.6.1",
+    "dotenv": "^16.5.0",
+    "mime": "^3.0.0",
+    "puppeteer": "^24.6.1",
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
+    "@types/mime": "^3.0.4",
+    "@types/node": "^20.17.30",
+    "typescript": "^5.8.3"
+  }
+}
