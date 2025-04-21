@@ -15,6 +15,8 @@ $config = @{
       "env" = @{
         "GEMINI_API_KEY" = "AIzaSyBGskNtesKEZOghmEzQRAikKdxnq75XPA4"
         "IS_REMOTE" = "true"
+        # You can uncomment and customize this line to set a specific output directory
+        # "OUTPUT_DIR" = "$env:USERPROFILE\Desktop\mcp-cartoons"
       }
     }
   }
@@ -23,3 +25,5 @@ $config = @{
 $config | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath
 
 Write-Host "Claude Desktop configuration updated successfully!" 
+Write-Host "Images will be saved to the desktop or documents folder by default."
+Write-Host "You can customize the save location by editing this script and uncommenting the OUTPUT_DIR line." 

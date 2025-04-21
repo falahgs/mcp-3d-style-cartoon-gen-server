@@ -104,17 +104,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const inlineData = chunk.candidates[0].content.parts[0].inlineData;
           const buffer = Buffer.from(inlineData.data || '', 'base64');
           
-          // Save the image
-          const outputFileName = fileName.endsWith('.png') ? fileName : `${fileName}.png`;
+          // Create an output filename with timestamp for uniqueness
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const outputFileName = fileName.endsWith('.png') 
+            ? fileName 
+            : `${fileName}_${timestamp}.png`;
+          
           const isRemote = process.env.IS_REMOTE === 'true';
-          const { savedPath, publicUrl } = await saveImageBuffer(buffer, outputFileName, isRemote);
+          
+          // Save the image with cross-platform path handling
+          const { savedPath, publicUrl } = await saveImageToAppropriateLocation(buffer, outputFileName, isRemote);
           
           // Create preview HTML with appropriate image path
           const previewHtml = createImagePreview(savedPath, publicUrl, isRemote);
 
           // Create and save HTML file
-          const htmlFileName = `${fileName}_preview.html`;
-          const htmlPath = join(process.cwd(), 'output', htmlFileName);
+          const htmlFileName = `${outputFileName.replace('.png', '')}_preview.html`;
+          const outputDir = getOutputDirectory();
+          const htmlPath = join(outputDir, htmlFileName);
+          
+          // Ensure directory exists before writing
+          ensureDirectoryExists(outputDir);
           writeFileSync(htmlPath, previewHtml, 'utf8');
 
           // Only try to open in browser if not in remote mode
@@ -165,36 +175,125 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-// Updated utility functions
-async function saveImageBuffer(buffer: Buffer, fileName: string, isRemote: boolean = false): Promise<{savedPath: string, publicUrl?: string}> {
-  // Ensure output directory exists
-  const outputDir = join(process.cwd(), 'output');
-  if (!existsSync(outputDir)) {
-    mkdirSync(outputDir, { recursive: true });
+// Updated utility functions with cross-platform support
+function getOutputDirectory(): string {
+  // Get the appropriate output directory based on OS
+  // First check if output dir is specified in env
+  if (process.env.OUTPUT_DIR) {
+    return process.env.OUTPUT_DIR;
   }
   
-  // Save the image file
+  // Default to OS-specific common locations
+  if (process.platform === 'win32') {
+    // Windows: Use Desktop or Documents
+    const desktopPath = join(process.env.USERPROFILE || '', 'Desktop', 'mcp-3d-cartoons');
+    if (isDirectoryWriteable(desktopPath)) {
+      return desktopPath;
+    }
+    const documentsPath = join(process.env.USERPROFILE || '', 'Documents', 'mcp-3d-cartoons');
+    if (isDirectoryWriteable(documentsPath)) {
+      return documentsPath;
+    }
+  } else if (process.platform === 'darwin') {
+    // macOS
+    const desktopPath = join(process.env.HOME || '', 'Desktop', 'mcp-3d-cartoons');
+    if (isDirectoryWriteable(desktopPath)) {
+      return desktopPath;
+    }
+    const documentsPath = join(process.env.HOME || '', 'Documents', 'mcp-3d-cartoons');
+    if (isDirectoryWriteable(documentsPath)) {
+      return documentsPath;
+    }
+  } else {
+    // Linux/Unix
+    const homePath = join(process.env.HOME || '', 'mcp-3d-cartoons');
+    if (isDirectoryWriteable(homePath)) {
+      return homePath;
+    }
+  }
+  
+  // Fallback to current working directory/output
+  return join(process.cwd(), 'output');
+}
+
+function isDirectoryWriteable(dirPath: string): boolean {
+  try {
+    // If directory doesn't exist yet, check parent
+    if (!existsSync(dirPath)) {
+      const parentDir = dirPath.split('/').slice(0, -1).join('/');
+      if (!existsSync(parentDir)) {
+        return false;
+      }
+      
+      // Try to create the directory
+      mkdirSync(dirPath, { recursive: true });
+      return true;
+    }
+    
+    // Test write access by creating a temporary file
+    const testFile = join(dirPath, `.write-test-${Date.now()}`);
+    writeFileSync(testFile, '');
+    
+    // Clean up
+    try {
+      import('fs').then(fs => fs.unlinkSync(testFile));
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+    
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function ensureDirectoryExists(dirPath: string): void {
+  if (!existsSync(dirPath)) {
+    mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+async function saveImageToAppropriateLocation(buffer: Buffer, fileName: string, isRemote: boolean = false): Promise<{savedPath: string, publicUrl?: string}> {
+  // Get the output directory based on OS and writability
+  const outputDir = getOutputDirectory();
+  
+  // Ensure the directory exists
+  ensureDirectoryExists(outputDir);
+  
+  // Save the image file with normalized path
   const outputPath = join(outputDir, fileName);
   writeFileSync(outputPath, buffer);
   
   // For remote mode, we could return a public URL if available
-  // This is a placeholder - in a real implementation you might upload to S3/etc
-  const publicUrl = isRemote ? `/output/${fileName}` : undefined;
+  let publicUrl = undefined;
+  
+  if (isRemote) {
+    // Normalize the path for URL use
+    const normalizedPath = outputPath.replace(/\\/g, '/');
+    publicUrl = `/output/${fileName}`;
+    
+    // Log for debugging
+    console.log(`Image saved to ${outputPath}`);
+    console.log(`Public URL: ${publicUrl}`);
+  }
   
   return { savedPath: outputPath, publicUrl };
 }
 
 function createImagePreview(imagePath: string, publicUrl?: string, isRemote: boolean = false): string {
+  // Normalize paths for consistent file:// URLs
+  let normalizedPath = imagePath.replace(/\\/g, '/');
+  
   // For remote mode, use the publicUrl if available
-  // For local mode, use the file:// protocol
-  const imageUrl = isRemote && publicUrl 
-    ? publicUrl 
-    : `file://${imagePath}`;
+  // For local mode, use the file:// protocol with proper OS path handling
+  const imageUrl = isRemote && publicUrl
+    ? publicUrl
+    : `file://${normalizedPath}`;
 
   // Add download button for remote usage
   const downloadButton = isRemote 
     ? `<div style="margin-top: 15px; text-align: center;">
-         <a href="${imageUrl}" download="${imagePath.split('/').pop()}" 
+         <a href="${imageUrl}" download="${normalizedPath.split('/').pop()}" 
             style="display: inline-block; background: #4CAF50; color: white; 
                    padding: 10px 20px; text-decoration: none; border-radius: 4px; 
                    font-weight: bold;">
@@ -215,6 +314,7 @@ function createImagePreview(imagePath: string, publicUrl?: string, isRemote: boo
   <div style="max-width: 800px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
     <div style="padding: 20px; background: #f0f9ff; border-bottom: 1px solid #e0e0e0;">
       <h1 style="margin: 0; color: #333; font-size: 24px;">3D Cartoon Image</h1>
+      <p style="margin: 5px 0 0; color: #666;">Saved to: ${normalizedPath}</p>
     </div>
     <div style="padding: 20px;">
       <div style="border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
@@ -236,11 +336,14 @@ async function openInBrowser(filePath: string): Promise<void> {
       return;
     }
     
+    // Normalize the path for the current OS
+    const normalizedPath = filePath.replace(/\//g, process.platform === 'win32' ? '\\' : '/');
+    
     const command = process.platform === 'win32' 
-      ? `start "" "${filePath}"`
+      ? `start "" "${normalizedPath}"`
       : process.platform === 'darwin'
-        ? `open "${filePath}"`
-        : `xdg-open "${filePath}"`;
+        ? `open "${normalizedPath}"`
+        : `xdg-open "${normalizedPath}"`;
     
     await execAsync(command);
   } catch (error) {

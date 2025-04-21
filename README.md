@@ -11,6 +11,7 @@ A professional-grade server for generating high-quality 3D-style cartoon images 
 - **Instant Preview**: Automatically opens generated images in your default browser
 - **Local Storage**: Saves images and previews in an organized output directory
 - **Professional Configuration**: Robust error handling and logging
+- **Cross-Platform Support**: Intelligent file path handling for Windows, macOS, and Linux
 
 ## 🛠️ Technical Stack
 
@@ -145,6 +146,28 @@ To enable remote mode, set the environment variable in your Claude Desktop confi
   "IS_REMOTE": "true"
 }
 ```
+
+### Cross-Platform Path Handling
+
+The server includes intelligent path handling that works across different operating systems:
+
+- **Windows**: Saves to User's Desktop or Documents folder by default
+- **macOS**: Uses Desktop or Documents folder in the user's home directory
+- **Linux/Unix**: Saves to a folder in the user's home directory
+
+You can override the default save location by setting the `OUTPUT_DIR` environment variable:
+
+```json
+"env": {
+  "GEMINI_API_KEY": "your_key_here",
+  "OUTPUT_DIR": "/custom/path/to/save/images"
+}
+```
+
+Each generated image includes:
+- Unique timestamp to prevent overwriting
+- HTML preview file with proper file:// URLs for your OS
+- Automatic directory creation if the save location doesn't exist
 
 ### Example Prompts
 
