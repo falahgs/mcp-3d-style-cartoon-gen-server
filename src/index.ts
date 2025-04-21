@@ -7,16 +7,18 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { GoogleGenAI } from '@google/genai';
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { writeFileSync, existsSync, mkdirSync, accessSync, constants } from 'fs';
+import { join, dirname, resolve, normalize, sep, basename } from 'path';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { homedir, platform, userInfo } from 'os';
 
 const execAsync = promisify(exec);
 
 dotenv.config();
 
+// Server initialization
 const server = new Server({
   name: "mcp-3d-cartoon-server",
   version: "1.0.0",
@@ -71,7 +73,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 // Handle tool execution
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
   if (request.params.name === "generate_3d_cartoon") {
     const { prompt, fileName } = request.params.arguments as { prompt: string; fileName: string };
     
@@ -112,19 +114,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           const isRemote = process.env.IS_REMOTE === 'true';
           
-          // Save the image with cross-platform path handling
-          const { savedPath, publicUrl } = await saveImageToAppropriateLocation(buffer, outputFileName, isRemote);
+          // Find appropriate save location with OS detection
+          const { savedPath, publicUrl } = await saveImageWithProperPath(buffer, outputFileName, isRemote);
           
           // Create preview HTML with appropriate image path
           const previewHtml = createImagePreview(savedPath, publicUrl, isRemote);
 
-          // Create and save HTML file
+          // Create and save HTML file with same path handling
           const htmlFileName = `${outputFileName.replace('.png', '')}_preview.html`;
-          const outputDir = getOutputDirectory();
-          const htmlPath = join(outputDir, htmlFileName);
+          const htmlPath = join(dirname(savedPath), htmlFileName);
           
           // Ensure directory exists before writing
-          ensureDirectoryExists(outputDir);
+          ensureDirectoryExists(dirname(htmlPath));
           writeFileSync(htmlPath, previewHtml, 'utf8');
 
           // Only try to open in browser if not in remote mode
@@ -175,72 +176,99 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-// Updated utility functions with cross-platform support
-function getOutputDirectory(): string {
-  // Get the appropriate output directory based on OS
-  // First check if output dir is specified in env
-  if (process.env.OUTPUT_DIR) {
-    return process.env.OUTPUT_DIR;
-  }
+// Improved OS detection and path handling functions
+function getDesktopPath(): string {
+  const home = homedir();
   
-  // Default to OS-specific common locations
-  if (process.platform === 'win32') {
-    // Windows: Use Desktop or Documents
-    const desktopPath = join(process.env.USERPROFILE || '', 'Desktop', 'mcp-3d-cartoons');
-    if (isDirectoryWriteable(desktopPath)) {
-      return desktopPath;
-    }
-    const documentsPath = join(process.env.USERPROFILE || '', 'Documents', 'mcp-3d-cartoons');
-    if (isDirectoryWriteable(documentsPath)) {
-      return documentsPath;
-    }
-  } else if (process.platform === 'darwin') {
+  // Check if saveToDesktop is explicitly requested
+  const saveToDesktop = process.env.SAVE_TO_DESKTOP === 'true';
+  
+  if (platform() === 'win32') {
+    // Windows - User profile desktop
+    return join(process.env.USERPROFILE || home, 'Desktop');
+  } else if (platform() === 'darwin') {
     // macOS
-    const desktopPath = join(process.env.HOME || '', 'Desktop', 'mcp-3d-cartoons');
-    if (isDirectoryWriteable(desktopPath)) {
-      return desktopPath;
-    }
-    const documentsPath = join(process.env.HOME || '', 'Documents', 'mcp-3d-cartoons');
-    if (isDirectoryWriteable(documentsPath)) {
-      return documentsPath;
-    }
+    return join(home, 'Desktop');
   } else {
-    // Linux/Unix
-    const homePath = join(process.env.HOME || '', 'mcp-3d-cartoons');
-    if (isDirectoryWriteable(homePath)) {
-      return homePath;
-    }
+    // Linux - Use XDG if available
+    return join(home, 'Desktop');
   }
-  
-  // Fallback to current working directory/output
-  return join(process.cwd(), 'output');
 }
 
-function isDirectoryWriteable(dirPath: string): boolean {
+function getDocumentsPath(): string {
+  const home = homedir();
+  
+  if (platform() === 'win32') {
+    // Windows - User profile documents
+    return join(process.env.USERPROFILE || home, 'Documents');
+  } else if (platform() === 'darwin') {
+    // macOS
+    return join(home, 'Documents');
+  } else {
+    // Linux - Use XDG if available or default to home
+    return home;
+  }
+}
+
+function getBestSavePath(): string {
   try {
-    // If directory doesn't exist yet, check parent
-    if (!existsSync(dirPath)) {
-      const parentDir = dirPath.split('/').slice(0, -1).join('/');
-      if (!existsSync(parentDir)) {
+    // First check for explicit settings
+    if (process.env.OUTPUT_DIR) {
+      const outputDir = resolve(process.env.OUTPUT_DIR);
+      if (isPathWriteable(outputDir)) {
+        return outputDir;
+      }
+    }
+    
+    // Check if saveToDesktop is explicitly requested
+    const saveToDesktop = process.env.SAVE_TO_DESKTOP === 'true';
+    if (saveToDesktop) {
+      const desktopPath = getDesktopPath();
+      const targetDir = join(desktopPath, 'mcp-3d-cartoons');
+      ensureDirectoryExists(targetDir);
+      return targetDir;
+    }
+    
+    // Try desktop first
+    const desktopPath = join(getDesktopPath(), 'mcp-3d-cartoons');
+    if (isPathWriteable(dirname(desktopPath))) {
+      ensureDirectoryExists(desktopPath);
+      return desktopPath;
+    }
+    
+    // Then documents
+    const docsPath = join(getDocumentsPath(), 'mcp-3d-cartoons');
+    if (isPathWriteable(dirname(docsPath))) {
+      ensureDirectoryExists(docsPath);
+      return docsPath;
+    }
+    
+    // Finally fallback to home directory
+    const homePath = join(homedir(), 'mcp-3d-cartoons');
+    ensureDirectoryExists(homePath);
+    return homePath;
+  } catch (error) {
+    console.warn('Error finding best save path, falling back to output directory in CWD:', error);
+    const fallbackPath = join(process.cwd(), 'output');
+    ensureDirectoryExists(fallbackPath);
+    return fallbackPath;
+  }
+}
+
+function isPathWriteable(path: string): boolean {
+  try {
+    if (!existsSync(path)) {
+      // If path doesn't exist, try to make it
+      try {
+        ensureDirectoryExists(path);
+        return true;
+      } catch (e) {
         return false;
       }
-      
-      // Try to create the directory
-      mkdirSync(dirPath, { recursive: true });
-      return true;
     }
     
-    // Test write access by creating a temporary file
-    const testFile = join(dirPath, `.write-test-${Date.now()}`);
-    writeFileSync(testFile, '');
-    
-    // Clean up
-    try {
-      import('fs').then(fs => fs.unlinkSync(testFile));
-    } catch (e) {
-      // Ignore cleanup errors
-    }
-    
+    // Test write access
+    accessSync(path, constants.W_OK);
     return true;
   } catch (error) {
     return false;
@@ -249,51 +277,69 @@ function isDirectoryWriteable(dirPath: string): boolean {
 
 function ensureDirectoryExists(dirPath: string): void {
   if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
+    try {
+      mkdirSync(dirPath, { recursive: true });
+    } catch (error) {
+      console.error(`Failed to create directory "${dirPath}":`, error);
+      throw error;
+    }
   }
 }
 
-async function saveImageToAppropriateLocation(buffer: Buffer, fileName: string, isRemote: boolean = false): Promise<{savedPath: string, publicUrl?: string}> {
-  // Get the output directory based on OS and writability
-  const outputDir = getOutputDirectory();
-  
-  // Ensure the directory exists
-  ensureDirectoryExists(outputDir);
-  
-  // Save the image file with normalized path
-  const outputPath = join(outputDir, fileName);
-  writeFileSync(outputPath, buffer);
-  
-  // For remote mode, we could return a public URL if available
-  let publicUrl = undefined;
-  
-  if (isRemote) {
-    // Normalize the path for URL use
-    const normalizedPath = outputPath.replace(/\\/g, '/');
-    publicUrl = `/output/${fileName}`;
+async function saveImageWithProperPath(buffer: Buffer, fileName: string, isRemote: boolean = false): Promise<{savedPath: string, publicUrl?: string}> {
+  try {
+    // Get best save path based on OS and permissions
+    const saveDir = getBestSavePath();
     
     // Log for debugging
-    console.log(`Image saved to ${outputPath}`);
-    console.log(`Public URL: ${publicUrl}`);
+    console.log(`Saving to directory: ${saveDir}`);
+    console.log(`Platform: ${platform()}`);
+    console.log(`Home directory: ${homedir()}`);
+    
+    // Ensure save directory exists
+    ensureDirectoryExists(saveDir);
+    
+    // Create full path and normalize for OS
+    const outputPath = normalize(join(saveDir, fileName));
+    
+    // Save the file
+    writeFileSync(outputPath, buffer);
+    console.log(`Image saved successfully to: ${outputPath}`);
+    
+    // For remote mode, create a publicUrl
+    let publicUrl = undefined;
+    if (isRemote) {
+      // In remote mode, the path needs to be accessible to the client
+      // This could be a relative path or a full URL depending on your setup
+      publicUrl = `/output/${fileName}`;
+      console.log(`Public URL for remote access: ${publicUrl}`);
+    }
+    
+    return { savedPath: outputPath, publicUrl };
+  } catch (error) {
+    console.error('Error saving image:', error);
+    // Fallback to output directory
+    const fallbackDir = join(process.cwd(), 'output');
+    ensureDirectoryExists(fallbackDir);
+    const fallbackPath = join(fallbackDir, fileName);
+    writeFileSync(fallbackPath, buffer);
+    console.log(`Fallback save to: ${fallbackPath}`);
+    return { savedPath: fallbackPath };
   }
-  
-  return { savedPath: outputPath, publicUrl };
 }
 
 function createImagePreview(imagePath: string, publicUrl?: string, isRemote: boolean = false): string {
-  // Normalize paths for consistent file:// URLs
-  let normalizedPath = imagePath.replace(/\\/g, '/');
+  // Normalize paths for consistent URL handling
+  let normalizedPath = normalize(imagePath).replace(/\\/g, '/');
   
-  // For remote mode, use the publicUrl if available
-  // For local mode, use the file:// protocol with proper OS path handling
+  // For remote mode, use publicUrl if available, otherwise local file
   const imageUrl = isRemote && publicUrl
-    ? publicUrl
+    ? publicUrl 
     : `file://${normalizedPath}`;
-
-  // Add download button for remote usage
+  
   const downloadButton = isRemote 
     ? `<div style="margin-top: 15px; text-align: center;">
-         <a href="${imageUrl}" download="${normalizedPath.split('/').pop()}" 
+         <a href="${imageUrl}" download="${basename(normalizedPath)}" 
             style="display: inline-block; background: #4CAF50; color: white; 
                    padding: 10px 20px; text-decoration: none; border-radius: 4px; 
                    font-weight: bold;">
@@ -301,6 +347,13 @@ function createImagePreview(imagePath: string, publicUrl?: string, isRemote: boo
          </a>
        </div>`
     : '';
+
+  const osInfo = `
+    <div style="margin-top: 10px; font-size: 12px; color: #666;">
+      <p>OS: ${platform()}</p>
+      <p>Save directory: ${dirname(normalizedPath)}</p>
+    </div>
+  `;
 
   return `
 <!DOCTYPE html>
@@ -321,6 +374,7 @@ function createImagePreview(imagePath: string, publicUrl?: string, isRemote: boo
         <img src="${imageUrl}" alt="Generated image" style="width: 100%; height: auto; display: block;">
       </div>
       ${downloadButton}
+      ${osInfo}
     </div>
   </div>
 </body>
@@ -331,24 +385,25 @@ function createImagePreview(imagePath: string, publicUrl?: string, isRemote: boo
 async function openInBrowser(filePath: string): Promise<void> {
   try {
     // Check for headless environment
-    if (process.env.DISPLAY === undefined && process.platform !== 'win32' && process.platform !== 'darwin') {
+    if (process.env.DISPLAY === undefined && platform() !== 'win32' && platform() !== 'darwin') {
       console.log('Headless environment detected, skipping browser open');
       return;
     }
     
-    // Normalize the path for the current OS
-    const normalizedPath = filePath.replace(/\//g, process.platform === 'win32' ? '\\' : '/');
+    // Ensure path is properly formatted for the OS
+    const normalizedPath = normalize(filePath);
     
-    const command = process.platform === 'win32' 
+    // Different commands for different OSes
+    const command = platform() === 'win32' 
       ? `start "" "${normalizedPath}"`
-      : process.platform === 'darwin'
+      : platform() === 'darwin'
         ? `open "${normalizedPath}"`
         : `xdg-open "${normalizedPath}"`;
     
     await execAsync(command);
+    console.log(`Opened in browser: ${normalizedPath}`);
   } catch (error) {
     console.error('Error opening file in browser:', error);
-    // Don't throw - just log the error and continue
     console.log('Unable to open browser automatically. File saved at:', filePath);
   }
 } 

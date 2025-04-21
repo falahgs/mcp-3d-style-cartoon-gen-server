@@ -12,6 +12,7 @@ A professional-grade server for generating high-quality 3D-style cartoon images 
 - **Local Storage**: Saves images and previews in an organized output directory
 - **Professional Configuration**: Robust error handling and logging
 - **Cross-Platform Support**: Intelligent file path handling for Windows, macOS, and Linux
+- **Smart OS Detection**: Automatically finds the best save location for each operating system
 
 ## 🛠️ Technical Stack
 
@@ -61,21 +62,28 @@ To integrate the MCP 3D Cartoon Generator with Claude Desktop:
 ```json
 {
   "mcpServers": {
-    "mcp-3d-cartoon-server": {
-      "command": "node",
+    "mcp-3d-style-cartoon-gen-server": {
+      "command": "cmd",
       "args": [
-        "G:\\mcp-projects\\mcp-3d-style-cartoon-gen-server\\build\\index.js" 
+        "/c",
+        "npx",
+        "-y",
+        "@smithery/cli@latest",
+        "run",
+        "@falahgs/mcp-3d-style-cartoon-gen-server",
+        "--config",
+        "{\"geminiApiKey\":\"your_gemini_api_key_here\", \"crossPlatformPaths\": true, \"saveToDesktop\": true}"
       ],
       "env": {
-        "GEMINI_API_KEY": "your_gemini_api_key_here",
-        "IS_REMOTE": "true"
+        "IS_REMOTE": "true",
+        "DETECT_OS_PATHS": "true"
       }
     }
   }
 }
 ```
 
-Note: Replace the path in `args` with the actual path to your cloned repository's `build/index.js` file.
+This configuration uses Smithery to automatically handle cross-platform path issues, ensuring that image files are saved in the appropriate location for your operating system.
 
 ## 🚀 Usage
 
@@ -149,25 +157,38 @@ To enable remote mode, set the environment variable in your Claude Desktop confi
 
 ### Cross-Platform Path Handling
 
-The server includes intelligent path handling that works across different operating systems:
+The server supports two methods for handling file paths across different operating systems:
 
-- **Windows**: Saves to User's Desktop or Documents folder by default
-- **macOS**: Uses Desktop or Documents folder in the user's home directory
-- **Linux/Unix**: Saves to a folder in the user's home directory
+#### 1. Using Smithery Package (Recommended)
+When using the MCP server through Claude Desktop, the Smithery package provides automatic OS detection and path handling:
 
-You can override the default save location by setting the `OUTPUT_DIR` environment variable:
+- **Windows**: Saves to User's Desktop folder by default
+- **macOS**: Uses Desktop folder in the user's home directory
+- **Linux**: Saves to a folder in the user's home directory
 
-```json
-"env": {
-  "GEMINI_API_KEY": "your_key_here",
-  "OUTPUT_DIR": "/custom/path/to/save/images"
-}
-```
+Key configuration options:
+- `crossPlatformPaths`: Enables automatic path normalization 
+- `saveToDesktop`: Ensures files are saved to the desktop on all platforms
+- `DETECT_OS_PATHS`: Environment variable that activates OS-specific path detection
 
-Each generated image includes:
-- Unique timestamp to prevent overwriting
-- HTML preview file with proper file:// URLs for your OS
-- Automatic directory creation if the save location doesn't exist
+#### 2. Direct Node.js Usage (Advanced)
+When running the server directly via Node.js, it implements custom path handling logic:
+
+- **Windows**: Tries Desktop first (USERPROFILE\Desktop), then Documents (USERPROFILE\Documents)
+- **macOS**: Uses Desktop in HOME directory, falls back to Documents
+- **Linux**: Tries Desktop, falls back to user's HOME directory
+- **Fallback**: Uses current working directory's "output" folder if all else fails
+
+For direct usage, environment variables provide additional control:
+- `OUTPUT_DIR`: Specify exact save location (used first if set and writable)
+- `SAVE_TO_DESKTOP`: Force saving to Desktop folder across all OS platforms 
+
+Additional features:
+- **Write permission checking**: Tests if directories are actually writable
+- **Automatic directory creation**: Creates folders if they don't exist
+- **Robust error handling**: Falls back gracefully if primary save locations fail
+- **Path normalization**: Properly handles backslashes and forward slashes by OS
+- **Diagnostic logging**: Shows detected OS and save paths for troubleshooting
 
 ### Example Prompts
 
